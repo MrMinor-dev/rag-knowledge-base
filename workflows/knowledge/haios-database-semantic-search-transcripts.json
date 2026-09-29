@@ -1,0 +1,281 @@
+{
+  "name": "HAIOS: Database - Semantic Search Transcripts [L2]",
+  "description": "Generates a query embedding and runs vector similarity search against the transcript_embeddings corpus (session transcripts). Same pipeline as Semantic Search V4 but targets session transcripts instead of doc embeddings.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "{{WEBHOOK_ID}}",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "{{WEBHOOK_ID}}"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-mpnet-base-v2/pipeline/feature-extraction",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: $json.body.query }) }}",
+        "options": {}
+      },
+      "id": "generate_embedding",
+      "name": "Generate Query Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  file_path,\n  chunk_index,\n  content,\n  metadata,\n  1 - (embedding <=> '{{ $json.embedding }}'::vector) as similarity\nFROM transcript_embeddings\nWHERE 1 - (embedding <=> '{{ $json.embedding }}'::vector) > 0.3\nORDER BY embedding <=> '{{ $json.embedding }}'::vector\nLIMIT {{ $json.limit }};",
+        "options": {}
+      },
+      "id": "search_supabase",
+      "name": "Search Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        672,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL}}",
+          "name": "{{CREDENTIAL}}"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all().map(item => ({\n  file_path: item.json.file_path,\n  chunk_index: item.json.chunk_index,\n  content: item.json.content,\n  similarity: parseFloat(item.json.similarity).toFixed(4),\n  metadata: item.json.metadata\n}));\n\nreturn [{\n  json: {\n    success: true,\n    query: $('Format Query Embedding').first().json.query,\n    result_count: results.length,\n    results: results\n  }\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "format_results",
+      "name": "Format Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "return_results",
+      "name": "Return Results",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $input.all().map(item => item.json);\nconst query = $('Webhook Trigger').item.json.body.query;\nconst limit = $('Webhook Trigger').item.json.body.limit || 5;\n\nreturn [{\n  json: {\n    embedding: JSON.stringify(embedding),\n    query: query,\n    limit: limit\n  }\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        208
+      ],
+      "id": "dea5d69f-442c-4fb5-9de1-61275e44c590",
+      "name": "Format Query Embedding"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        528
+      ],
+      "id": "e79f0f95-d10e-4b60-bf65-b338a5252f54",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO haios_health_checks (\n  component, workflow_id, execution_id, node_name,\n  layer, business_id, state, error_message, raw_result, timestamp\n) VALUES (\n  'HAIOS-Intel-Semantic-Search-Transcripts',\n  '{{WORKFLOW_ID}}',\n  '{{ $json.execution.id }}',\n  'Error: Log',\n  'HAIOS',\n  'mrminor',\n  'error',\n  '{{ $json.execution.error.message }}',\n  jsonb_build_object('node', '{{ $json.execution.lastNodeExecuted }}', 'error', '{{ $json.execution.error.message }}'),\n  NOW()\n)",
+        "options": {}
+      },
+      "id": "9afd7b1e-5b99-4a06-b419-5930f6068053",
+      "name": "Error: Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        528
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL}}",
+          "name": "{{CREDENTIAL}}"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO haios_health_checks (\n  component, workflow_id, execution_id, node_name,\n  layer, business_id, state, raw_result, timestamp\n) VALUES (\n  'HAIOS-Intel-Semantic-Search-Transcripts',\n  '{{WORKFLOW_ID}}',\n  '{{ $execution.id }}',\n  'Success: Log',\n  'HAIOS',\n  'mrminor',\n  'ok',\n  '{{ $json.raw_result_safe }}'::jsonb,\n  NOW()\n)",
+        "options": {}
+      },
+      "id": "f6a374d1-b85e-448d-a70a-84a6ef902e43",
+      "name": "Success: Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1344,
+        304
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "{{CREDENTIAL}}",
+          "name": "{{CREDENTIAL}}"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pgEscape = (s) => String(s ?? '').replace(/'/g, \"''\");\nconst rawResult = JSON.stringify({\n  success: $json.success || false,\n  query: $json.query || '',\n  result_count: $json.result_count || 0\n});\nreturn [{ json: { raw_result_safe: pgEscape(rawResult) } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "bd559c29-f797-433a-a3c8-6a4e6c60f19d",
+      "name": "Prepare HC Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        304
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Format Query Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Supabase": {
+      "main": [
+        [
+          {
+            "node": "Format Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Results": {
+      "main": [
+        [
+          {
+            "node": "Return Results",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare HC Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Query Embedding": {
+      "main": [
+        [
+          {
+            "node": "Search Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Error: Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare HC Data": {
+      "main": [
+        [
+          {
+            "node": "Success: Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "availableInMCP": true
+  },
+  "tags": [
+    {
+      "name": "lifecycle:pending"
+    }
+  ]
+}

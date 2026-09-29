@@ -1,0 +1,15 @@
+# MCP Server dependencies
+mcp>=1.0.0
+
+# Supabase / Postgres connectivity (semantic_index.py)
+psycopg2-binary>=2.9.0
+requests>=2.31.0
+
+# Note (-followup):
+# Pre-Supabase-migration deps removed: chromadb, sentence-transformers, numpy, torch.
+# The current pipeline uses HuggingFace Inference API for embeddings (remote, no local model)
+# and Supabase doc_embeddings table for storage (no local ChromaDB).
+# If reactivating local-model embedding (e.g., for offline rebuild), restore:
+#   sentence-transformers>=2.2.0
+#   torch>=2.0.0
+#   numpy>=1.24.0
